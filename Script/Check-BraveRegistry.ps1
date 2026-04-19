@@ -1,47 +1,44 @@
-# Check-BraveRegistry.ps1 - Biztonsági beállítások validálása
-
-# 1. TLS 1.2 kényszerítése (GitHub-hoz kötelező)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# FONTOS: Ügyelj a 'raw' előtagra!
 $regUrl = "https://githubusercontent.com"
 $tempReg = Join-Path $env:TEMP "check_brave.reg"
 
 Write-Host "--- Brave Registry Ellenőrzés Indítása ---" -ForegroundColor Cyan
 
 try {
-    # 2. Letöltés hibakezeléssel
+    Write-Host "Kapcsolat tesztelése: raw.githubusercontent.com..." -ForegroundColor Gray
+    if (-not (Test-Connection -ComputerName "raw.githubusercontent.com" -Count 1 -Quiet)) {
+        throw "A GitHub szervere nem érhető el. Ellenőrizd az internetet vagy a DNS beállításokat!"
+    }
+
     Invoke-WebRequest -Uri $regUrl -OutFile $tempReg -UseBasicParsing -ErrorAction Stop
     
-    # 3. Beolvasás kényszerített kódolással (a .reg fájlok miatt)
-    $regContent = Get-Content $tempReg -Encoding Unicode -ErrorAction SilentlyContinue
-    if (-not $regContent -or $regContent[0] -notmatch "Windows Registry Editor") {
-        $regContent = Get-Content $tempReg -Encoding UTF8
-    }
+    # Beolvasás (próbálkozás több kódolással)
+    $regContent = Get-Content $tempReg -Raw
+    # Ha a fájl binárisnak tűnik (null byte-ok), olvassuk újra Unicode-ként
+    if ($regContent -match "\x00") { $regContent = Get-Content $tempReg -Raw -Encoding Unicode }
 
     $mismatches = @()
     $currentKey = ""
 
-    foreach ($line in $regContent) {
+    foreach ($line in ($regContent -split "`r`n")) {
         $line = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("Windows Registry Editor")) { continue }
 
-        # Ág keresése
         if ($line -match "^\[(.*)\]$") {
             $currentKey = $matches[1].Replace("HKEY_LOCAL_MACHINE", "HKLM:").Replace("HKEY_CURRENT_USER", "HKCU:")
         }
-        # Kulcs-érték pár keresése
         elseif ($line -match "^`"(.+)`"=(.+)$") {
             $name = $matches[1]
             $valRaw = $matches[2]
             
-            # Érték konvertálása
             $expected = if ($valRaw -match "dword:([0-9a-fA-F]+)") { 
                 [Convert]::ToInt32($matches[1], 16) 
             } else { 
                 $valRaw.Trim('"') 
             }
 
-            # Ellenőrzés a Registry-ben
             try {
                 if (-not (Test-Path $currentKey)) {
                     $mismatches += "HIÁNYZIK AZ ÁG: $currentKey"
@@ -52,7 +49,7 @@ try {
                     $mismatches += "$name (Várt: $expected, Van: $actual)" 
                 }
             } catch {
-                $mismatches += "$name (Nincs beállítva az ágban)"
+                $mismatches += "$name (Nincs beállítva)"
             }
         }
     }
@@ -65,8 +62,7 @@ try {
     }
 
 } catch {
-    # Itt most már TÉNYLEG kiírja, mi a baj (pl. hálózati hiba vagy elérés megtagadva)
-    Write-Host "HIBA TÖRTÉNT: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "HIBA: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     if (Test-Path $tempReg) { Remove-Item $tempReg -Force -ErrorAction SilentlyContinue }
 }
