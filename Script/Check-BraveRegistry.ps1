@@ -1,22 +1,17 @@
+# Check-BraveRegistry.ps1 - Biztonsági beállítások validálása
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# FONTOS: Ügyelj a 'raw' előtagra!
+# A REGISZTRÁCIÓS FÁJL PONTOS RAW CÍME:
 $regUrl = "https://githubusercontent.com"
 $tempReg = Join-Path $env:TEMP "check_brave.reg"
 
 Write-Host "--- Brave Registry Ellenőrzés Indítása ---" -ForegroundColor Cyan
 
 try {
-    Write-Host "Kapcsolat tesztelése: raw.githubusercontent.com..." -ForegroundColor Gray
-    if (-not (Test-Connection -ComputerName "raw.githubusercontent.com" -Count 1 -Quiet)) {
-        throw "A GitHub szervere nem érhető el. Ellenőrizd az internetet vagy a DNS beállításokat!"
-    }
-
+    # Letöltés a pontos címmel
     Invoke-WebRequest -Uri $regUrl -OutFile $tempReg -UseBasicParsing -ErrorAction Stop
     
-    # Beolvasás (próbálkozás több kódolással)
     $regContent = Get-Content $tempReg -Raw
-    # Ha a fájl binárisnak tűnik (null byte-ok), olvassuk újra Unicode-ként
     if ($regContent -match "\x00") { $regContent = Get-Content $tempReg -Raw -Encoding Unicode }
 
     $mismatches = @()
@@ -27,7 +22,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("Windows Registry Editor")) { continue }
 
         if ($line -match "^\[(.*)\]$") {
-            $currentKey = $matches[1].Replace("HKEY_LOCAL_MACHINE", "HKLM:").Replace("HKEY_CURRENT_USER", "HKCU:")
+            $currentKey = $line.TrimStart('[').TrimEnd(']').Replace("HKEY_LOCAL_MACHINE", "HKLM:").Replace("HKEY_CURRENT_USER", "HKCU:")
         }
         elseif ($line -match "^`"(.+)`"=(.+)$") {
             $name = $matches[1]
