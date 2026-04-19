@@ -1,5 +1,6 @@
 # Check-BraveRegistry.ps1 - Biztonsági beállítások validálása
-# Biztonsági protokoll kényszerítése (TLS 1.2) a letöltéshez
+
+# 1. TLS 1.2 kényszerítése (GitHub-hoz kötelező)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $regUrl = "https://githubusercontent.com"
@@ -8,11 +9,15 @@ $tempReg = Join-Path $env:TEMP "check_brave.reg"
 Write-Host "--- Brave Registry Ellenőrzés Indítása ---" -ForegroundColor Cyan
 
 try {
-    Write-Host "Forrás letöltése: $regUrl" -ForegroundColor Gray
+    # 2. Letöltés hibakezeléssel
     Invoke-WebRequest -Uri $regUrl -OutFile $tempReg -UseBasicParsing -ErrorAction Stop
     
-    # A GitHub reg fájlok gyakran UTF-16 kódolásúak, így olvassuk be
-    $regContent = Get-Content $tempReg
+    # 3. Beolvasás kényszerített kódolással (a .reg fájlok miatt)
+    $regContent = Get-Content $tempReg -Encoding Unicode -ErrorAction SilentlyContinue
+    if (-not $regContent -or $regContent[0] -notmatch "Windows Registry Editor") {
+        $regContent = Get-Content $tempReg -Encoding UTF8
+    }
+
     $mismatches = @()
     $currentKey = ""
 
@@ -20,20 +25,23 @@ try {
         $line = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("Windows Registry Editor")) { continue }
 
+        # Ág keresése
         if ($line -match "^\[(.*)\]$") {
             $currentKey = $matches[1].Replace("HKEY_LOCAL_MACHINE", "HKLM:").Replace("HKEY_CURRENT_USER", "HKCU:")
         }
+        # Kulcs-érték pár keresése
         elseif ($line -match "^`"(.+)`"=(.+)$") {
             $name = $matches[1]
             $valRaw = $matches[2]
             
-            # Érték konvertálása (dword -> int)
+            # Érték konvertálása
             $expected = if ($valRaw -match "dword:([0-9a-fA-F]+)") { 
                 [Convert]::ToInt32($matches[1], 16) 
             } else { 
                 $valRaw.Trim('"') 
             }
 
+            # Ellenőrzés a Registry-ben
             try {
                 if (-not (Test-Path $currentKey)) {
                     $mismatches += "HIÁNYZIK AZ ÁG: $currentKey"
@@ -44,7 +52,7 @@ try {
                     $mismatches += "$name (Várt: $expected, Van: $actual)" 
                 }
             } catch {
-                $mismatches += "$name (Hiányzik a kulcs az ágból)"
+                $mismatches += "$name (Nincs beállítva az ágban)"
             }
         }
     }
@@ -55,8 +63,10 @@ try {
         Write-Host "[!] Az alábbi eltérések találhatók:" -ForegroundColor Red
         $mismatches | Select-Object -Unique | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
     }
+
 } catch {
-    Write-Host "Hiba történt: $($_.Exception.Message)" -ForegroundColor Red
+    # Itt most már TÉNYLEG kiírja, mi a baj (pl. hálózati hiba vagy elérés megtagadva)
+    Write-Host "HIBA TÖRTÉNT: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
-    if (Test-Path $tempReg) { Remove-Item $tempReg -Force }
+    if (Test-Path $tempReg) { Remove-Item $tempReg -Force -ErrorAction SilentlyContinue }
 }
